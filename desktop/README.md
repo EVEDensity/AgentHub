@@ -313,7 +313,11 @@ The next delivery slices are:
    keyboard Chinese input, keyboard zoom, and shutdown are classified by
    [ADR-0136](../docs/architecture/decisions/0136-webview2-shared-surface-observation.md).
    A fixture observation is not a packaged WebView2 run, and live services stay
-   unverified. The shell's in-memory token is not an admin-origin login bridge;
+   unverified. `webview2-acceptance.mjs` runs identity first, then a second
+   launch whose debugging argument is only loopback; it fails when the
+   packaged executable or product session is absent. See
+   [ADR-0137](../docs/architecture/decisions/0137-packaged-webview2-acceptance-sequence.md).
+   The shell's in-memory token is not an admin-origin login bridge;
    injecting fixture localStorage cannot establish product authentication.
 
 See the [ordered component plan](../docs/roadmaps/composable-agent-platform-plan.md#511-web-与-desktop-ui-组件target)

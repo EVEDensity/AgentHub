@@ -68,7 +68,7 @@ function launchDesktop(executable) {
   return child;
 }
 
-async function stopProcess(pid) {
+export async function stopProcess(pid) {
   if (!Number.isInteger(pid) || pid <= 0) fail('Refusing to stop an invalid process id.');
   try {
     await execute('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true, timeout: 15_000 });
