@@ -269,7 +269,10 @@ Desktop 已验证。远端 CI 全绿是阶段完成条件，未运行的浏览�
    登录观察切片要求同一份进程归属报告，并且只承认页面自己发出的一次
    `POST /api/auth/login`；调试端口只能是测试进程上的 loopback。见
    [ADR-0135](../architecture/decisions/0135-webview2-product-login-observation.md)。
-   后续仍须把这次观察接到实际打包进程，并验证嵌套 Mission/Artifact frame、离线本地资源、中文输入、缩放、只读和关闭释放。
+   共享界面观察要求同一份登录报告，并同时核对 loopback 管理页中的只读产物 frame、
+   本地 script/worker、键盘中文输入、键盘缩放和进程退出。见
+   [ADR-0136](../architecture/decisions/0136-webview2-shared-surface-observation.md)。
+   这三项观察都还没有从摘要匹配的打包进程产出通过报告。接到实际进程之前，不能把 UI-4c 标为完成。
    现有 shell 内存 token 没有 admin-origin 登录桥，不能注入 localStorage 冒充产品认证。
    如需桥接，先独立确定凭据、origin、权限和撤销合同并补 ADR；失败时显示实际错误。
 4. **UI-5，受支持客户端试用记录。** 交付/测试负责；依赖 UI-4c。在无仓库和开发工具的

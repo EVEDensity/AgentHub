@@ -1,5 +1,10 @@
 # Desktop preview harness tests
 
+`webview2-surface.test.mjs` covers the nested admin and read-only artifact
+frames, loopback script/worker resources, keyboard Chinese input, zoom, and
+shutdown after the login report. It does not launch the packaged executable
+or claim a live service.
+
 `webview2-login.test.mjs` covers the loopback debugging argument, the admin
 form login interaction, and rejection of a pre-seeded token. It does not
 launch the packaged executable. Shared UI acceptance is still separate.

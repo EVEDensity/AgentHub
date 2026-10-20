@@ -309,7 +309,10 @@ The next delivery slices are:
    page-initiated `POST /api/auth/login`, over a loopback debugging port, with
    no pre-seeded token. See
    [ADR-0135](../docs/architecture/decisions/0135-webview2-product-login-observation.md).
-   Shared Mission/Artifact frames, Chinese input, zoom, and shutdown remain
+   Shared Mission/Artifact frames, loopback script and worker resources,
+   keyboard Chinese input, keyboard zoom, and shutdown are classified by
+   [ADR-0136](../docs/architecture/decisions/0136-webview2-shared-surface-observation.md).
+   A fixture observation is not a packaged WebView2 run, and live services stay
    unverified. The shell's in-memory token is not an admin-origin login bridge;
    injecting fixture localStorage cannot establish product authentication.
 
