@@ -102,6 +102,9 @@ claimed. This change does not modify the Tauri shell or its command surface.
   run directory. Its native commands use the existing browser-preview fixtures.
 - `webview2-gui-smoke.ps1`: compatibility entry point for that browser preview;
   the historical name does not establish native WebView2 coverage.
+- `webview2-native-smoke.mjs`: launches a digest-matched packaged executable
+  and records whether its own WebView2 process appears. Passing this check
+  does not verify login, shared UI, services, input, zoom, or shutdown.
 - `updater-rollback-smoke.ps1`: verifies signed updater metadata and rehearses
   restoring the previous ready sidecar after a failed candidate launch.
 - `ui/`: dependency-free shell UI served by the desktop application,
@@ -295,10 +298,26 @@ The next delivery slices are:
    and installer contents from the same commit, including the full stack,
    baked loopback rewrites, Monaco workers, xterm, fonts and license notices.
    Missing/stale/tampered assets must fail before any native GUI claim.
-3. **UI-4c, native WebView2 (target):** launch the actual packaged executable,
-   identify its own WebView2 process, use the real login path, and verify shared
-   Mission/Artifact frames, local assets, Chinese input, zoom and shutdown.
-   The shell's in-memory token is not currently an admin-origin login bridge;
+3. **UI-4c, native WebView2 (in progress):** `webview2-native-smoke.mjs`
+   launches a digest-matched `agenthub-desktop.exe` and accepts only an
+   `msedgewebview2.exe` parent chain that reaches that process. A passing
+   report is process identity only: login, shared Mission/Artifact frames,
+   local assets, Chinese input, zoom, and shutdown stay false, and no
+   debugging port is opened. See
+   [ADR-0134](../docs/architecture/decisions/0134-native-webview2-process-identity.md).
+   Product login is a later observation: the admin form must produce one
+   page-initiated `POST /api/auth/login`, over a loopback debugging port, with
+   no pre-seeded token. See
+   [ADR-0135](../docs/architecture/decisions/0135-webview2-product-login-observation.md).
+   Shared Mission/Artifact frames, loopback script and worker resources,
+   keyboard Chinese input, keyboard zoom, and shutdown are classified by
+   [ADR-0136](../docs/architecture/decisions/0136-webview2-shared-surface-observation.md).
+   A fixture observation is not a packaged WebView2 run, and live services stay
+   unverified. `webview2-acceptance.mjs` runs identity first, then a second
+   launch whose debugging argument is only loopback; it fails when the
+   packaged executable or product session is absent. See
+   [ADR-0137](../docs/architecture/decisions/0137-packaged-webview2-acceptance-sequence.md).
+   The shell's in-memory token is not an admin-origin login bridge;
    injecting fixture localStorage cannot establish product authentication.
 
 See the [ordered component plan](../docs/roadmaps/composable-agent-platform-plan.md#511-web-与-desktop-ui-组件target)

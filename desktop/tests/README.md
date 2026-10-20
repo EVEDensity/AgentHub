@@ -1,5 +1,25 @@
 # Desktop preview harness tests
 
+`webview2-acceptance.test.mjs` covers the identity-before-login launch order,
+loopback debugging refusal, and the requirement that acceptance leaves live
+services unverified. It does not start the packaged executable.
+
+`webview2-surface.test.mjs` covers the nested admin and read-only artifact
+frames, loopback script/worker resources, keyboard Chinese input, zoom, and
+shutdown after the login report. It does not launch the packaged executable
+or claim a live service.
+
+`webview2-login.test.mjs` covers the loopback debugging argument, the admin
+form login interaction, and rejection of a pre-seeded token. It does not
+launch the packaged executable. Shared UI acceptance is still separate.
+
+`webview2-native-smoke.test.mjs` covers packaged-executable digest matching,
+WebView2 parent-chain ownership, cleanup failure, and the rule that an
+identity pass cannot claim login or shared UI. It does not launch the product
+or attach to a native WebView2. A live Windows run is
+`node desktop/webview2-native-smoke.mjs --executable <agenthub-desktop.exe>
+--expected-sha256 <package digest>`.
+
 `shell-browser-smoke.test.mjs` uses Node's built-in test runner to exercise the
 smoke harness's real static HTTP boundary, exclusive port ownership, cleanup
 failures and failed subprocess reports. On Windows it also invokes the legacy
