@@ -1,5 +1,9 @@
 # Desktop preview harness tests
 
+`webview2-login.test.mjs` covers the loopback debugging argument, the admin
+form login interaction, and rejection of a pre-seeded token. It does not
+launch the packaged executable. Shared UI acceptance is still separate.
+
 `webview2-native-smoke.test.mjs` covers packaged-executable digest matching,
 WebView2 parent-chain ownership, cleanup failure, and the rule that an
 identity pass cannot claim login or shared UI. It does not launch the product

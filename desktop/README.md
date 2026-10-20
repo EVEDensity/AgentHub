@@ -305,7 +305,12 @@ The next delivery slices are:
    local assets, Chinese input, zoom, and shutdown stay false, and no
    debugging port is opened. See
    [ADR-0134](../docs/architecture/decisions/0134-native-webview2-process-identity.md).
-   The shell's in-memory token is not an admin-origin login bridge;
+   Product login is a later observation: the admin form must produce one
+   page-initiated `POST /api/auth/login`, over a loopback debugging port, with
+   no pre-seeded token. See
+   [ADR-0135](../docs/architecture/decisions/0135-webview2-product-login-observation.md).
+   Shared Mission/Artifact frames, Chinese input, zoom, and shutdown remain
+   unverified. The shell's in-memory token is not an admin-origin login bridge;
    injecting fixture localStorage cannot establish product authentication.
 
 See the [ordered component plan](../docs/roadmaps/composable-agent-platform-plan.md#511-web-与-desktop-ui-组件target)

@@ -13,6 +13,7 @@ Create new records from `0000-template.md`.
 
 | ADR | Title |
 |---|---|
+| [0135](0135-webview2-product-login-observation.md) | Observe product login through the admin form |
 | [0134](0134-native-webview2-process-identity.md) | Identify the packaged executable's own WebView2 process |
 | [0133](0133-desktop-package-resource-integrity.md) | Verify resources extracted from one full desktop build |
 | [0131](0131-registered-log-artifact-snapshots.md) | Display registered log Artifact snapshots through xterm |

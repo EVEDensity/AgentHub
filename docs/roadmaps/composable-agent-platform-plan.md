@@ -266,8 +266,10 @@ Desktop 已验证。远端 CI 全绿是阶段完成条件，未运行的浏览�
    UI-4b。进程归属切片已落地：只启动摘要匹配的 `agenthub-desktop.exe`，确认
    `msedgewebview2.exe` 的父进程链回到该进程，且报告不能声称登录或共享界面已验收。
    见 [ADR-0134](../architecture/decisions/0134-native-webview2-process-identity.md)。
-   后续仍须在归属证明之后，仅为测试进程启用调试连接，使用真实登录路径，
-   验证嵌套 Mission/Artifact frame、离线本地资源、中文输入、缩放、只读和关闭释放。
+   登录观察切片要求同一份进程归属报告，并且只承认页面自己发出的一次
+   `POST /api/auth/login`；调试端口只能是测试进程上的 loopback。见
+   [ADR-0135](../architecture/decisions/0135-webview2-product-login-observation.md)。
+   后续仍须把这次观察接到实际打包进程，并验证嵌套 Mission/Artifact frame、离线本地资源、中文输入、缩放、只读和关闭释放。
    现有 shell 内存 token 没有 admin-origin 登录桥，不能注入 localStorage 冒充产品认证。
    如需桥接，先独立确定凭据、origin、权限和撤销合同并补 ADR；失败时显示实际错误。
 4. **UI-5，受支持客户端试用记录。** 交付/测试负责；依赖 UI-4c。在无仓库和开发工具的
