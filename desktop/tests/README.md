@@ -1,5 +1,12 @@
 # Desktop preview harness tests
 
+`webview2-native-smoke.test.mjs` covers packaged-executable digest matching,
+WebView2 parent-chain ownership, cleanup failure, and the rule that an
+identity pass cannot claim login or shared UI. It does not launch the product
+or attach to a native WebView2. A live Windows run is
+`node desktop/webview2-native-smoke.mjs --executable <agenthub-desktop.exe>
+--expected-sha256 <package digest>`.
+
 `shell-browser-smoke.test.mjs` uses Node's built-in test runner to exercise the
 smoke harness's real static HTTP boundary, exclusive port ownership, cleanup
 failures and failed subprocess reports. On Windows it also invokes the legacy

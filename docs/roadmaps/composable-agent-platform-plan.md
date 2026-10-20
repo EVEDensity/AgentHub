@@ -263,7 +263,10 @@ Desktop 已验证。远端 CI 全绿是阶段完成条件，未运行的浏览�
    包装一致，不能替代原生 WebView2 运行，也不等于完整全栈许可或签名审计。
    见 [ADR-0133](../architecture/decisions/0133-desktop-package-resource-integrity.md)。
 3. **UI-4c，真实 WebView2 和登录流程。** Desktop/Frontend/认证维护者共同负责；依赖
-   UI-4b。仅为测试进程启用调试连接，确认实际 exe 与其 WebView2 归属，使用真实登录路径，
+   UI-4b。进程归属切片已落地：只启动摘要匹配的 `agenthub-desktop.exe`，确认
+   `msedgewebview2.exe` 的父进程链回到该进程，且报告不能声称登录或共享界面已验收。
+   见 [ADR-0134](../architecture/decisions/0134-native-webview2-process-identity.md)。
+   后续仍须在归属证明之后，仅为测试进程启用调试连接，使用真实登录路径，
    验证嵌套 Mission/Artifact frame、离线本地资源、中文输入、缩放、只读和关闭释放。
    现有 shell 内存 token 没有 admin-origin 登录桥，不能注入 localStorage 冒充产品认证。
    如需桥接，先独立确定凭据、origin、权限和撤销合同并补 ADR；失败时显示实际错误。
